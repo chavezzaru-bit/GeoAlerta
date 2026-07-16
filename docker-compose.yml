@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgis/postgis:15-3.4
+    container_name: geoalert_db
+    environment:
+      - POSTGRES_USER=geoalert_user
+      - POSTGRES_PASSWORD=geoalert_pass
+      - POSTGRES_DB=geoalert_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - geoalert_pgdata:/var/lib/postgresql/data
+
+volumes:
+  geoalert_pgdata:

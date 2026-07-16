@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoAlert - Dashboard Smart City</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { margin: 0; padding: 20px; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1a1a1a; color: white; }
+        .header { text-align: center; margin-bottom: 40px; }
+        .header h1 { color: #1e90ff; margin: 0; }
+        .header p { color: #ced6e0; }
+        
+        .kpi-container { display: flex; justify-content: space-around; margin-bottom: 40px; }
+        .kpi-box { background: #2f3542; padding: 20px; border-radius: 10px; text-align: center; width: 25%; box-shadow: 0 4px 6px rgba(0,0,0,0.3); border-top: 4px solid #1e90ff; }
+        .kpi-value { font-size: 36px; font-weight: bold; margin: 10px 0; color: #ffdd59; }
+        .kpi-label { font-size: 14px; color: #a4b0be; text-transform: uppercase; }
+
+        .charts-container { display: flex; justify-content: space-around; gap: 20px; }
+        .chart-box { background: #2f3542; padding: 20px; border-radius: 10px; width: 45%; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .nav-btn { display: inline-block; padding: 10px 20px; background: #333; color: white; text-decoration: none; border-radius: 5px; margin-bottom: 20px; border: 1px solid #555; }
+        .nav-btn:hover { background: #555; }
+    </style>
+</head>
+<body>
+
+    <a href="/static/index.html" class="nav-btn">⬅ Volver al Mapa Táctico</a>
+
+    <div class="header">
+        <h1>📊 Panel de Autoridades B2G</h1>
+        <p>Monitor de Estadísticas en Tiempo Real - GeoAlert Smart City</p>
+    </div>
+
+    <div class="kpi-container">
+        <div class="kpi-box">
+            <div class="kpi-label">Evacuados a Salvo</div>
+            <div class="kpi-value" id="kpi-evacuated">0</div>
+        </div>
+        <div class="kpi-box" style="border-color: #ff4757;">
+            <div class="kpi-label">Zonas de Siniestro</div>
+            <div class="kpi-value" style="color: #ff4757;" id="kpi-zones">0</div>
+        </div>
+        <div class="kpi-box" style="border-color: #2ed573;">
+            <div class="kpi-label">Capacidad Restante</div>
+            <div class="kpi-value" style="color: #2ed573;" id="kpi-free">0</div>
+        </div>
+    </div>
+
+    <div class="charts-container">
+        <div class="chart-box">
+            <h3 style="text-align: center; color: #ced6e0;">Estado de Refugios</h3>
+            <canvas id="sheltersChart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3 style="text-align: center; color: #ced6e0;">Ocupación Global</h3>
+            <canvas id="globalChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        let sheltersChart = null;
+        let globalChart = null;
+
+        async function loadDashboard() {
+            try {
+                const req = await fetch('/api/stats');
+                const data = await req.json();
+
+                // 1. Actualizar KPIs
+                document.getElementById('kpi-evacuated').innerText = data.global.total_occupancy;
+                document.getElementById('kpi-zones').innerText = data.global.risk_zones_active;
+                document.getElementById('kpi-free').innerText = data.global.total_capacity - data.global.total_occupancy;
+
+                // 2. Preparar Datos para Gráficas
+                const labels = data.shelters.map(s => s.name);
+                const occupancyData = data.shelters.map(s => s.occupancy);
+                const freeData = data.shelters.map(s => s.free);
+
+                // 3. Gráfica de Barras (Refugios)
+                const ctxShelters = document.getElementById('sheltersChart').getContext('2d');
+                if(sheltersChart) sheltersChart.destroy();
+                sheltersChart = new Chart(ctxShelters, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Ocupados',
+                                data: occupancyData,
+                                backgroundColor: '#ff4757'
+                            },
+                            {
+                                label: 'Disponibles',
+                                data: freeData,
+                                backgroundColor: '#2ed573'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            x: { stacked: true },
+                            y: { stacked: true }
+                        },
+                        plugins: { legend: { labels: { color: 'white' } } }
+                    }
+                });
+
+                // 4. Gráfica de Dona (Global)
+                const ctxGlobal = document.getElementById('globalChart').getContext('2d');
+                if(globalChart) globalChart.destroy();
+                globalChart = new Chart(ctxGlobal, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Ocupado', 'Libre'],
+                        datasets: [{
+                            data: [data.global.total_occupancy, data.global.total_capacity - data.global.total_occupancy],
+                            backgroundColor: ['#ff4757', '#2ed573'],
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: { legend: { labels: { color: 'white' } } }
+                    }
+                });
+
+            } catch(e) {
+                console.error("Error cargando dashboard:", e);
+            }
+        }
+
+        // Cargar inmediatamente y luego cada 3 segundos
+        loadDashboard();
+        setInterval(loadDashboard, 3000);
+    </script>
+</body>
+</html>

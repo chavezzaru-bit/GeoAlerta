@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoAlert - Monitor Táctico de Evacuación</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1a1a1a; color: white; }
+        #map { width: 100vw; height: 100vh; z-index: 1; }
+        #overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            border: 1px solid #333;
+            max-width: 300px;
+            backdrop-filter: blur(5px);
+        }
+        h1 { margin: 0 0 10px 0; font-size: 20px; color: #ff4757; text-transform: uppercase; letter-spacing: 1px; }
+        p { margin: 0 0 15px 0; font-size: 14px; color: #ced6e0; line-height: 1.5; }
+        .shelter-card {
+            background: #2f3542;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            border-left: 4px solid #2ed573;
+        }
+        .shelter-card.full { border-left-color: #ff4757; }
+        .shelter-name { font-weight: bold; margin-bottom: 5px; }
+        .shelter-stats { font-size: 12px; color: #a4b0be; }
+        .pulse {
+            animation: pulse-animation 2s infinite;
+        }
+        @keyframes pulse-animation {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(46, 213, 115, 0.7); }
+            70% { transform: scale(1.05); box-shadow: 0 0 0 10px rgba(46, 213, 115, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(46, 213, 115, 0); }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="overlay">
+        <h1>🚨 GeoAlert MVP V2.0</h1>
+        <p>Centro de Mando de Evacuación: Lima, Perú.</p>
+        
+        <!-- Controles de Modo -->
+        <div style="margin-bottom: 15px; display: flex; gap: 10px;">
+            <button id="btn-evac" onclick="setMode('evac')" style="flex:1; padding:8px; background:#1e90ff; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">Modo: Evacuar</button>
+            <button id="btn-risk" onclick="setMode('risk')" style="flex:1; padding:8px; background:#333; color:white; border:none; border-radius:5px; cursor:pointer;">Modo: Siniestro</button>
+        </div>
+
+        <p id="instruction-text" style="font-size: 12px; color: #feca57;">👉 Haz CLIC en cualquier parte del mapa para simular una evacuación.</p>
+        <hr style="border-color:#333; margin: 15px 0;">
+        <div id="shelters-list">Cargando refugios...</div>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // Estado Global
+        let currentMode = 'evac'; // 'evac' o 'risk'
+        
+        function setMode(mode) {
+            currentMode = mode;
+            document.getElementById('btn-evac').style.background = mode === 'evac' ? '#1e90ff' : '#333';
+            document.getElementById('btn-evac').style.fontWeight = mode === 'evac' ? 'bold' : 'normal';
+            document.getElementById('btn-risk').style.background = mode === 'risk' ? '#ff4757' : '#333';
+            document.getElementById('btn-risk').style.fontWeight = mode === 'risk' ? 'bold' : 'normal';
+            
+            document.getElementById('instruction-text').innerText = mode === 'evac' 
+                ? "👉 Haz CLIC en cualquier parte del mapa para simular una evacuación." 
+                : "🔥 Haz CLIC para reportar un nuevo derrumbe en tiempo real.";
+            document.getElementById('instruction-text').style.color = mode === 'evac' ? '#feca57' : '#ff4757';
+        }
+
+        // Inicializar mapa centrado en Lima (Miraflores)
+        const map = L.map('map').setView([-12.1219, -77.0297], 14);
+
+        // Capa de mapa oscuro (estilo táctico)
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+        }).addTo(map);
+
+        let currentRouteLine = null;
+        let currentUserMarker = null;
+
+        // Cargar zonas de riesgo desde la base de datos
+        async function loadRiskZones() {
+            try {
+                const response = await fetch('/api/risk-zones');
+                const zones = await response.json();
+                
+                zones.forEach(z => {
+                    const polygon = z.coordinates.map(c => [c.lat, c.lon]);
+                    L.polygon(polygon, {color: '#ff4757', fillColor: '#ff4757', fillOpacity: 0.3})
+                     .addTo(map)
+                     .bindPopup(`<b>${z.name}</b><br>Riesgo Crítico`);
+                });
+            } catch (error) {
+                console.error("Error cargando zonas de riesgo:", error);
+            }
+        }
+
+        // Función para cargar los refugios
+        async function loadShelters() {
+            try {
+                const response = await fetch('/api/shelters');
+                const shelters = await response.json();
+                
+                const listDiv = document.getElementById('shelters-list');
+                listDiv.innerHTML = '<h3>Estado de Refugios</h3>';
+                
+                shelters.forEach(s => {
+                    const isFull = s.current_occupancy >= s.max_capacity;
+                    listDiv.innerHTML += `
+                        <div class="shelter-card ${isFull ? 'full' : ''}">
+                            <div class="shelter-name">${s.name}</div>
+                            <div class="shelter-stats">Ocupación: ${s.current_occupancy} / ${s.max_capacity}</div>
+                            ${isFull ? '<div style="color:#ff4757; font-size:10px; font-weight:bold; margin-top:3px;">¡COLAPSADO!</div>' : ''}
+                        </div>
+                    `;
+                    const color = isFull ? 'red' : 'green';
+                    const markerIcon = L.divIcon({
+                        className: 'custom-div-icon',
+                        html: `<div style="background-color:${color}; width:15px; height:15px; border-radius:50%; border:2px solid white;" class="${!isFull ? 'pulse' : ''}"></div>`,
+                        iconSize: [15, 15],
+                        iconAnchor: [7, 7]
+                    });
+                    L.marker([s.lat, s.lon], {icon: markerIcon}).addTo(map).bindPopup(`<b>${s.name}</b><br>Ocupación: ${s.current_occupancy}/${s.max_capacity}`);
+                });
+            } catch (error) {
+                console.error("Error cargando refugios:", error);
+            }
+        }
+
+        // Evento: Al hacer clic en el mapa
+        map.on('click', async function(e) {
+            const lat = e.latlng.lat;
+            const lon = e.latlng.lng;
+
+            if (currentMode === 'evac') {
+                // LÓGICA DE EVACUACIÓN
+                if(currentRouteLine) map.removeLayer(currentRouteLine);
+                if(currentUserMarker) map.removeLayer(currentUserMarker);
+
+                currentUserMarker = L.circleMarker([lat, lon], {
+                    radius: 6, fillColor: "#1e90ff", color: "#ffffff", weight: 2, opacity: 1, fillOpacity: 1
+                }).addTo(map).bindPopup("Evacuando...").openPopup();
+
+                try {
+                    const req = await fetch('/evacuation-route', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ user_lat: lat, user_lon: lon, radius_meters: 800 })
+                    });
+                    if(!req.ok) {
+                        const err = await req.json();
+                        alert("Error: " + err.detail);
+                        return;
+                    }
+                    const data = await req.json();
+                    
+                    // Dibujar la ruta (línea guía)
+                    currentRouteLine = L.polyline(data.route_coordinates, {
+                        color: '#ffdd59', weight: 5, opacity: 0.9, dashArray: '10, 15', lineJoin: 'round'
+                    }).addTo(map);
+                    
+                    // Lógica de Animación
+                    let index = 0;
+                    const coords = data.route_coordinates;
+                    
+                    function animateMarker() {
+                        if (index < coords.length) {
+                            currentUserMarker.setLatLng([coords[index][0], coords[index][1]]);
+                            index++;
+                            setTimeout(animateMarker, 250); // Velocidad de la animación (250ms por punto)
+                        } else {
+                            currentUserMarker.bindPopup("¡A Salvo!").openPopup();
+                            loadShelters(); // Recargar los refugios solo al llegar
+                        }
+                    }
+                    
+                    animateMarker(); // Iniciar animación
+
+                } catch(error) {
+                    console.error(error);
+                    alert("Hubo un error contactando al motor de GeoAlert.");
+                }
+
+            } else {
+                // LÓGICA DE REPORTAR SINIESTRO (ZONA DE RIESGO DINÁMICA)
+                try {
+                    const req = await fetch('/api/risk-zones', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            name: "Derrumbe Reportado " + new Date().toLocaleTimeString(),
+                            lat: lat,
+                            lon: lon,
+                            radius_meters: 80.0 // 80 metros a la redonda
+                        })
+                    });
+                    if(!req.ok) {
+                        alert("Error al reportar siniestro.");
+                        return;
+                    }
+                    // Si fue exitoso, recargar zonas de riesgo en el mapa
+                    alert("⚠️ Alerta de derrumbe propagada al algoritmo.");
+                    // Nota: Idealmente deberíamos forzar a NetworkX a reconstruir el grafo en el backend para evadir esto en la próxima llamada.
+                    // (Para este MVP visual, lo graficamos).
+                    loadRiskZones();
+                } catch(error) {
+                    console.error("Error", error);
+                }
+            }
+        });
+
+        // Carga inicial
+        loadShelters();
+        loadRiskZones();
+    </script>
+</body>
+</html>
